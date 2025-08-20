@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+"""
+Invisible Cloak with HSV Trackbars
+----------------------------------
+Turn a colored cloth invisible using OpenCV.
+Supports live HSV slider adjustment for easy tuning.
+
+Controls:
+- q : Quit
+- b : (Re)capture background (step out of frame first!)
+- s : Save current output frame
+"""
+
+import cv2
+import numpy as np
+import time
+from datetime import datetime
+
+
+# ------------------ TRACKBAR SETUP ------------------
+def nothing(x):
+    pass
+
+def create_trackbar_window():
+    cv2.namedWindow("Trackbars")
+    cv2.createTrackbar("LH", "Trackbars", 0, 180, nothing)   # lower hue
+    cv2.createTrackbar("LS", "Trackbars", 120, 255, nothing) # lower sat
+    cv2.createTrackbar("LV", "Trackbars", 70, 255, nothing)  # lower val
+    cv2.createTrackbar("UH", "Trackbars", 10, 180, nothing)  # upper hue
+    cv2.createTrackbar("US", "Trackbars", 255, 255, nothing) # upper sat
+    cv2.createTrackbar("UV", "Trackbars", 255, 255, nothing) # upper val
+
+def get_hsv_range():
+    lh = cv2.getTrackbarPos("LH", "Trackbars")
+    ls = cv2.getTrackbarPos("LS", "Trackbars")
+    lv = cv2.getTrackbarPos("LV", "Trackbars")
+    uh = cv2.getTrackbarPos("UH", "Trackbars")
+    us = cv2.getTrackbarPos("US", "Trackbars")
+    uv = cv2.getTrackbarPos("UV", "Trackbars")
+    return (lh, ls, lv), (uh, us, uv)
+
+
+# ------------------ BACKGROUND CAPTURE ------------------
+def capture_background(cap, frames=60):
+    """Capture static background (step out of frame!)"""
+    time.sleep(2)
+    bg = None
+    for i in range(frames):
+        ret, frame = cap.read()
+        if not ret:
+            continue
+        frame = cv2.flip(frame, 1)
+        frame = cv2.GaussianBlur(frame, (5, 5), 0)
+        if bg is None:
+            bg = frame.astype(np.float32)
+        else:
+            bg = cv2.accumulateWeighted(frame, bg, 0.1)
+    return cv2.convertScaleAbs(bg)
+
+
+# ------------------ MAIN ------------------
+def main():
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        print("❌ Camera not detected!")
+        return
+
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+
+    print("[INFO] Step out of frame, capturing background...")
+    background = capture_background(cap)
+    print("[INFO] Background captured. Step back in!")
+
+    create_trackbar_window()
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        frame = cv2.flip(frame, 1)
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+        # get HSV range from trackbars
+        low, high = get_hsv_range()
+        lower = np.array(low, dtype=np.uint8)
+        upper = np.array(high, dtype=np.uint8)
+
+        # build mask
+        mask = cv2.inRange(hsv, lower, upper)
+
+        # refine mask
+        kernel = np.ones((3, 3), np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=2)
+        mask = cv2.dilate(mask, kernel, iterations=1)
+        inv_mask = cv2.bitwise_not(mask)
+
+        # apply invisibility effect
+        cloak_area = cv2.bitwise_and(background, background, mask=mask)
+        non_cloak = cv2.bitwise_and(frame, frame, mask=inv_mask)
+        output = cv2.addWeighted(cloak_area, 1, non_cloak, 1, 0)
+
+        # show windows
+        cv2.imshow("Invisible Cloak", output)
+        cv2.imshow("Mask (debug)", mask)
+
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord("q"):
+            break
+        elif key == ord("b"):
+            print("[INFO] Recapturing background...")
+            background = capture_background(cap)
+            print("[INFO] Background refreshed.")
+        elif key == ord("s"):
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            cv2.imwrite(f"cloak_{ts}.png", output)
+            print(f"[INFO] Frame saved as cloak_{ts}.png")
+
+    cap.release()
+    cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    main()
